@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>WPS Portal</title>
+    
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <link rel="apple-touch-icon" href="WPSLogo.jpg">
+    <link rel="icon" type="image/jpeg" href="WPSLogo.jpg">
+
+    <!-- Dependencies -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    colors: { 
+                        wps: { 
+                            deep: '#005496', 
+                            bright: '#00D1FF', 
+                            slate: '#53565A' 
+                        } 
+                    }
+                }
+            }
+        }
+    </script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700;900&display=swap');
+        body { 
+            font-family: 'Inter', sans-serif; 
+            background-color: #f8fafc; 
+            -webkit-tap-highlight-color: transparent; 
+            overflow-x: hidden; 
+        }
+        .no-select { -webkit-user-select: none; user-select: none; }
+        select { font-size: 16px !important; } 
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        const { useState, useEffect, useMemo } = React;
+
+        const API_URL = "https://script.google.com/macros/s/AKfycbx4RpGMEY7quXqwWd6SNf6Bu3hCTNPm5BmHt_PMidb3STiZMmBwafWOC2XcmHuHd_6p/exec"; 
+        const STORAGE_KEY = "wps_v16_layout_refinement"; 
+
+        const App = () => {
+            const [data, setData] = useState(() => {
+                const cached = localStorage.getItem(STORAGE_KEY);
+                return cached ? JSON.parse(cached) : null;
+            });
+            const [selectedSheetId, setSelectedSheetId] = useState("");
+            const [selectedDay, setSelectedDay] = useState("1");
+            const [isSyncing, setIsSyncing] = useState(false);
+
+            const cycleDay = useMemo(() => {
+                if (!data || !data.currentCycleDay) return "N/A";
+                const val = data.currentCycleDay.toString().trim();
+                return val.length > 2 ? val.charAt(0) : val;
+            }, [data]);
+
+            const syncData = async () => {
+                setIsSyncing(true);
+                try {
+                    const res = await fetch(API_URL);
+                    const json = await res.json();
+                    setData(json);
+                    localStorage.setItem(STORAGE_KEY, JSON.stringify(json));
+                } catch (e) {
+                    console.error("Sync failed", e);
+                } finally {
+                    setIsSyncing(false);
+                }
+            };
+
+            useEffect(() => { syncData(); }, []);
+
+            useEffect(() => {
+                const day = cycleDay?.charAt(0);
+                if (day && ["1", "2", "3", "4", "5"].includes(day)) {
+                    setSelectedDay(day);
+                }
+            }, [cycleDay]);
+
+            const staffList = useMemo(() => {
+                if (!data) return [];
+                const exclude = ["TEMPLATE", "MOD", "Language", "Dropdowns", "Staff", "REG", "Cycle Days", "currentCycleDay"];
+                return Object.keys(data)
+                    .filter(id => !exclude.includes(id))
+                    .map(id => ({
+                        id: id,
+                        displayName: data[id]?.displayName || id
+                    }))
+                    .sort((a, b) => {
+                        if (a.id === "PREPS") return -1;
+                        if (b.id === "PREPS") return 1;
+                        return a.displayName.localeCompare(b.displayName);
+                    });
+            }, [data]);
+
+            useEffect(() => {
+                if (staffList.length > 0 && !selectedSheetId) {
+                    setSelectedSheetId(staffList[0].id);
+                }
+            }, [staffList, selectedSheetId]);
+
+            if (!data) return (
+                <div className="h-screen flex flex-col items-center justify-center bg-white p-10 text-center">
+                    <img src="WPSLogo.jpg" className="w-20 h-20 animate-pulse mb-6" onerror="this.src='https://via.placeholder.com/80?text=WPS'"/>
+                    <p className="text-wps-deep font-black uppercase tracking-widest text-xs">Connecting...</p>
+                </div>
+            );
+
+            const periods = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
+            const currentStaff = data[selectedSheetId];
+            const currentSchedule = currentStaff?.schedule?.[selectedDay] || [];
+
+            return (
+                <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col no-select pb-20">
+                    <div className="bg-wps-deep p-5 text-white shadow-xl relative z-10">
+                        <div className="flex justify-between items-start mb-6">
+                            <div className="flex items-center gap-3 cursor-pointer" onClick={syncData}>
+                                <img src="WPSLogo.jpg" className={`w-12 h-12 bg-white rounded-xl p-1 shadow-inner ${isSyncing ? 'animate-spin' : ''}`} onerror="this.src='https://via.placeholder.com/48?text=W'"/>
+                                <div>
+                                    <h1 className="text-xl font-black uppercase tracking-tighter leading-none">WPS Hub</h1>
+                                    <p className="text-[10px] font-bold opacity-50 uppercase tracking-widest mt-1">
+                                        {isSyncing ? 'Refreshing...' : 'Staff Portal'}
+                                    </p>
+                                </div>
+                            </div>
+                            <div className="bg-white/10 backdrop-blur-md border border-white/20 rounded-2xl p-3 text-center min-w-[70px]">
+                                <p className="text-[8px] font-black uppercase opacity-60 mb-1">Cycle Day</p>
+                                <p className="text-2xl font-black text-wps-bright leading-none">{cycleDay}</p>
+                            </div>
+                        </div>
+
+                        <div className="flex gap-2 bg-black/20 p-1.5 rounded-2xl shadow-inner">
+                            {["1", "2", "3", "4", "5"].map(d => (
+                                <button 
+                                    key={d} 
+                                    onClick={() => setSelectedDay(d)} 
+                                    className={`flex-1 py-3 rounded-xl text-sm font-black transition-all ${selectedDay === d ? "bg-white text-wps-deep shadow-lg scale-105" : "text-white/40 hover:text-white/60"}`}
+                                >
+                                    D{d}
+                                </button>
+                            ))}
+                        </div>
+                    </div>
+
+                    <div className="p-4 space-y-4">
+                        <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100">
+                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-3 ml-1">Staff Member</label>
+                            <div className="relative">
+                                <select 
+                                    value={selectedSheetId} 
+                                    onChange={e => setSelectedSheetId(e.target.value)}
+                                    className="w-full bg-slate-50 border-2 border-slate-50 rounded-2xl p-4 font-black text-wps-deep text-lg focus:border-wps-bright outline-none appearance-none"
+                                >
+                                    {staffList.map(staff => (
+                                        <option key={staff.id} value={staff.id}>{staff.displayName}</option>
+                                    ))}
+                                </select>
+                                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none opacity-20">
+                                    <svg width="24" height="24" fill="currentColor" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" /></svg>
+                                </div>
+                            </div>
+                            
+                            {currentStaff?.assignment && (
+                                <div className="mt-4 flex items-center gap-2 px-1">
+                                    <div className="h-1.5 w-1.5 rounded-full bg-wps-bright animate-pulse"></div>
+                                    <span className="text-[10px] font-black text-wps-deep/60 uppercase tracking-wider truncate">
+                                        {currentStaff.assignment}
+                                    </span>
+                                </div>
+                            )}
+                        </div>
+
+                        <div className="space-y-3">
+                            {periods.map((pNum, i) => {
+                                const rawSubject = currentSchedule[i] || "";
+                                const isEmpty = !rawSubject || rawSubject === "Free Period";
+                                const subjectDisplay = isEmpty ? "Unknown, but probably something awesome" : rawSubject;
+                                
+                                return (
+                                    <div key={pNum} className="flex items-center p-4 rounded-3xl border-2 bg-white border-white shadow-sm transition-all">
+                                        <div className="w-10 h-10 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 mr-4 bg-wps-deep text-white shadow-md shadow-wps-deep/10">
+                                            {pNum}
+                                        </div>
+                                        <div className="flex-1 overflow-hidden">
+                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Period {pNum}</p>
+                                            <h4 className={`font-bold leading-tight text-wps-deep ${isEmpty ? 'text-[11px] leading-[1.2] italic whitespace-normal' : 'text-base truncate'}`}>
+                                                {subjectDisplay}
+                                            </h4>
+                                        </div>
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    </div>
+                    
+                    <footer className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-md py-4 text-center border-t border-slate-100 cursor-pointer active:opacity-50" onClick={syncData}>
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.5em]">Winchester Public School</p>
+                    </footer>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
