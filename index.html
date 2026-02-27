@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>WPS Portal</title>
+    <title>WPS Portal - Prep Tracker</title>
     
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -16,6 +16,11 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
+    <!-- Firebase SDKs -->
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-compat.js"></script>
+
     <script>
         tailwind.config = {
             theme: {
@@ -41,7 +46,13 @@
             overflow-x: hidden; 
         }
         .no-select { -webkit-user-select: none; user-select: none; }
-        select { font-size: 16px !important; } 
+        select { font-size: 16px !important; }
+        
+        @keyframes scaleIn {
+            from { opacity: 0; transform: scale(0.9); }
+            to { opacity: 1; transform: scale(1); }
+        }
+        .scale-in { animation: scaleIn 0.2s ease-out forwards; }
     </style>
 </head>
 <body>
@@ -50,10 +61,20 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
-        const API_URL = "https://script.google.com/macros/s/AKfycbx4RpGMEY7quXqwWd6SNf6Bu3hCTNPm5BmHt_PMidb3STiZMmBwafWOC2XcmHuHd_6p/exec"; 
-        const STORAGE_KEY = "wps_v16_layout_refinement"; 
+        // Firebase Setup using Compat layer for script tag compatibility
+        const firebaseConfig = JSON.parse(__firebase_config);
+        if (!firebase.apps.length) {
+            firebase.initializeApp(firebaseConfig);
+        }
+        const auth = firebase.auth();
+        const db = firebase.firestore();
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'wps-portal-v1';
+
+        const API_URL = "https://script.google.com/macros/s/AKfycbx4RpGMEY7quXqwWd6SNf6Bu3hCTNPm5BmHt_PMidb3STiZMmBwafWOC2XcmHuHd_6p/exec";
+        const STORAGE_KEY = "wps_v17_prep_tracking";
 
         const App = () => {
+            const [user, setUser] = useState(null);
             const [data, setData] = useState(() => {
                 const cached = localStorage.getItem(STORAGE_KEY);
                 return cached ? JSON.parse(cached) : null;
@@ -61,6 +82,42 @@
             const [selectedSheetId, setSelectedSheetId] = useState("");
             const [selectedDay, setSelectedDay] = useState("1");
             const [isSyncing, setIsSyncing] = useState(false);
+            const [view, setView] = useState("schedule");
+            const [owedData, setOwedData] = useState({});
+            const [modal, setModal] = useState(null);
+
+            // 1. Initialize Auth
+            useEffect(() => {
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await auth.signInWithCustomToken(__initial_auth_token);
+                        } else {
+                            await auth.signInAnonymously();
+                        }
+                    } catch (err) {
+                        console.error("Auth error", err);
+                    }
+                };
+                initAuth();
+                const unsubscribe = auth.onAuthStateChanged(setUser);
+                return () => unsubscribe();
+            }, []);
+
+            // 2. Listen to Owed Preps (Firestore)
+            useEffect(() => {
+                if (!user) return;
+                // Rule 1: Use strict pathing
+                const path = `artifacts/${appId}/public/data/owed_preps`;
+                const unsubscribe = db.collection(path).onSnapshot((snapshot) => {
+                    const results = {};
+                    snapshot.forEach((doc) => {
+                        results[doc.id] = doc.data().count || 0;
+                    });
+                    setOwedData(results);
+                }, (err) => console.error("Firestore error:", err));
+                return () => unsubscribe();
+            }, [user]);
 
             const cycleDay = useMemo(() => {
                 if (!data || !data.currentCycleDay) return "N/A";
@@ -113,9 +170,25 @@
                 }
             }, [staffList, selectedSheetId]);
 
+            const handleAction = async () => {
+                if (!modal || !user) return;
+                const { type, staffId } = modal;
+                const docRef = db.doc(`artifacts/${appId}/public/data/owed_preps/${staffId}`);
+                
+                try {
+                    const increment = firebase.firestore.FieldValue.increment(type === 'steal' ? 1 : -1);
+                    await docRef.set({ count: increment }, { merge: true });
+                } catch (e) {
+                    console.error("Update failed", e);
+                }
+                setModal(null);
+            };
+
             if (!data) return (
                 <div className="h-screen flex flex-col items-center justify-center bg-white p-10 text-center">
-                    <img src="WPSLogo.jpg" className="w-20 h-20 animate-pulse mb-6" onerror="this.src='https://via.placeholder.com/80?text=WPS'"/>
+                    <div className="w-20 h-20 bg-wps-deep rounded-2xl animate-pulse mb-6 flex items-center justify-center">
+                        <span className="text-white font-black text-2xl">W</span>
+                    </div>
                     <p className="text-wps-deep font-black uppercase tracking-widest text-xs">Connecting...</p>
                 </div>
             );
@@ -125,11 +198,14 @@
             const currentSchedule = currentStaff?.schedule?.[selectedDay] || [];
 
             return (
-                <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col no-select pb-20">
+                <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col no-select pb-24">
+                    {/* Header */}
                     <div className="bg-wps-deep p-5 text-white shadow-xl relative z-10">
                         <div className="flex justify-between items-start mb-6">
                             <div className="flex items-center gap-3 cursor-pointer" onClick={syncData}>
-                                <img src="WPSLogo.jpg" className={`w-12 h-12 bg-white rounded-xl p-1 shadow-inner ${isSyncing ? 'animate-spin' : ''}`} onerror="this.src='https://via.placeholder.com/48?text=W'"/>
+                                <div className={`w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-inner ${isSyncing ? 'animate-spin' : ''}`}>
+                                    <span className="text-wps-deep font-black text-xl">W</span>
+                                </div>
                                 <div>
                                     <h1 className="text-xl font-black uppercase tracking-tighter leading-none">WPS Hub</h1>
                                     <p className="text-[10px] font-bold opacity-50 uppercase tracking-widest mt-1">
@@ -143,72 +219,194 @@
                             </div>
                         </div>
 
-                        <div className="flex gap-2 bg-black/20 p-1.5 rounded-2xl shadow-inner">
-                            {["1", "2", "3", "4", "5"].map(d => (
-                                <button 
-                                    key={d} 
-                                    onClick={() => setSelectedDay(d)} 
-                                    className={`flex-1 py-3 rounded-xl text-sm font-black transition-all ${selectedDay === d ? "bg-white text-wps-deep shadow-lg scale-105" : "text-white/40 hover:text-white/60"}`}
-                                >
-                                    D{d}
-                                </button>
-                            ))}
+                        {/* View Toggle */}
+                        <div className="flex gap-2 bg-black/20 p-1 rounded-xl mb-4">
+                            <button 
+                                onClick={() => setView('schedule')}
+                                className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${view === 'schedule' ? 'bg-white text-wps-deep shadow-md' : 'text-white/60'}`}
+                            >
+                                Schedule
+                            </button>
+                            <button 
+                                onClick={() => setView('payback')}
+                                className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${view === 'payback' ? 'bg-white text-wps-deep shadow-md' : 'text-white/60'}`}
+                            >
+                                Payback {Object.values(owedData).reduce((a,b) => a+b, 0) > 0 && <span className="ml-1 px-1.5 py-0.5 bg-red-500 text-white rounded-full text-[8px]">{Object.values(owedData).reduce((a,b) => a+b, 0)}</span>}
+                            </button>
                         </div>
+
+                        {view === 'schedule' && (
+                            <div className="flex gap-2 bg-black/20 p-1.5 rounded-2xl shadow-inner">
+                                {["1", "2", "3", "4", "5"].map(d => (
+                                    <button 
+                                        key={d} 
+                                        onClick={() => setSelectedDay(d)} 
+                                        className={`flex-1 py-3 rounded-xl text-sm font-black transition-all ${selectedDay === d ? "bg-white text-wps-deep shadow-lg scale-105" : "text-white/40 hover:text-white/60"}`}
+                                    >
+                                        D{d}
+                                    </button>
+                                ))}
+                            </div>
+                        )}
                     </div>
 
+                    {/* Main Content */}
                     <div className="p-4 space-y-4">
-                        <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100">
-                            <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-3 ml-1">Staff Member</label>
-                            <div className="relative">
-                                <select 
-                                    value={selectedSheetId} 
-                                    onChange={e => setSelectedSheetId(e.target.value)}
-                                    className="w-full bg-slate-50 border-2 border-slate-50 rounded-2xl p-4 font-black text-wps-deep text-lg focus:border-wps-bright outline-none appearance-none"
-                                >
-                                    {staffList.map(staff => (
-                                        <option key={staff.id} value={staff.id}>{staff.displayName}</option>
-                                    ))}
-                                </select>
-                                <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none opacity-20">
-                                    <svg width="24" height="24" fill="currentColor" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" /></svg>
-                                </div>
-                            </div>
-                            
-                            {currentStaff?.assignment && (
-                                <div className="mt-4 flex items-center gap-2 px-1">
-                                    <div className="h-1.5 w-1.5 rounded-full bg-wps-bright animate-pulse"></div>
-                                    <span className="text-[10px] font-black text-wps-deep/60 uppercase tracking-wider truncate">
-                                        {currentStaff.assignment}
-                                    </span>
-                                </div>
-                            )}
-                        </div>
-
-                        <div className="space-y-3">
-                            {periods.map((pNum, i) => {
-                                const rawSubject = currentSchedule[i] || "";
-                                const isEmpty = !rawSubject || rawSubject === "Free Period";
-                                const subjectDisplay = isEmpty ? "Unknown, but probably something awesome" : rawSubject;
-                                
-                                return (
-                                    <div key={pNum} className="flex items-center p-4 rounded-3xl border-2 bg-white border-white shadow-sm transition-all">
-                                        <div className="w-10 h-10 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 mr-4 bg-wps-deep text-white shadow-md shadow-wps-deep/10">
-                                            {pNum}
-                                        </div>
-                                        <div className="flex-1 overflow-hidden">
-                                            <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Period {pNum}</p>
-                                            <h4 className={`font-bold leading-tight text-wps-deep ${isEmpty ? 'text-[11px] leading-[1.2] italic whitespace-normal' : 'text-base truncate'}`}>
-                                                {subjectDisplay}
-                                            </h4>
+                        {view === 'schedule' ? (
+                            <>
+                                <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100">
+                                    <label className="text-[10px] font-black text-slate-400 uppercase tracking-widest block mb-3 ml-1">Staff Member</label>
+                                    <div className="relative">
+                                        <select 
+                                            value={selectedSheetId} 
+                                            onChange={e => setSelectedSheetId(e.target.value)}
+                                            className="w-full bg-slate-50 border-2 border-slate-50 rounded-2xl p-4 font-black text-wps-deep text-lg focus:border-wps-bright outline-none appearance-none"
+                                        >
+                                            {staffList.map(staff => (
+                                                <option key={staff.id} value={staff.id}>{staff.displayName}</option>
+                                            ))}
+                                        </select>
+                                        <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none opacity-20">
+                                            <svg width="24" height="24" fill="currentColor" viewBox="0 0 20 20"><path d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" /></svg>
                                         </div>
                                     </div>
-                                );
-                            })}
-                        </div>
+                                    
+                                    {currentStaff?.assignment && (
+                                        <div className="mt-4 flex items-center justify-between px-1">
+                                            <div className="flex items-center gap-2">
+                                                <div className="h-1.5 w-1.5 rounded-full bg-wps-bright animate-pulse"></div>
+                                                <span className="text-[10px] font-black text-wps-deep/60 uppercase tracking-wider truncate">
+                                                    {currentStaff.assignment}
+                                                </span>
+                                            </div>
+                                            {owedData[selectedSheetId] > 0 && (
+                                                <span className="bg-red-100 text-red-600 text-[9px] font-black px-2 py-0.5 rounded-full">
+                                                    OWED: {owedData[selectedSheetId]}
+                                                </span>
+                                            )}
+                                        </div>
+                                    )}
+                                </div>
+
+                                <div className="space-y-3">
+                                    {periods.map((pNum, i) => {
+                                        const rawSubject = currentSchedule[i] || "";
+                                        const isEmpty = !rawSubject || rawSubject === "Free Period";
+                                        const subjectDisplay = isEmpty ? "Unknown, but probably something awesome" : rawSubject;
+                                        const isPrepsView = selectedSheetId === "PREPS";
+                                        
+                                        return (
+                                            <div 
+                                                key={pNum} 
+                                                onClick={() => {
+                                                    if (isPrepsView && !isEmpty) {
+                                                        setModal({ type: 'steal', staffId: rawSubject, name: rawSubject });
+                                                    }
+                                                }}
+                                                className={`flex items-center p-4 rounded-3xl border-2 bg-white border-white shadow-sm transition-all ${isPrepsView && !isEmpty ? 'active:scale-95 cursor-pointer border-dashed border-wps-bright/30' : ''}`}
+                                            >
+                                                <div className="w-10 h-10 rounded-2xl flex items-center justify-center font-black text-sm shrink-0 mr-4 bg-wps-deep text-white shadow-md shadow-wps-deep/10">
+                                                    {pNum}
+                                                </div>
+                                                <div className="flex-1 overflow-hidden">
+                                                    <div className="flex justify-between items-center">
+                                                        <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Period {pNum}</p>
+                                                        {isPrepsView && !isEmpty && <span className="text-[7px] font-black bg-wps-bright/10 text-wps-deep px-1.5 py-0.5 rounded">TAP TO STEAL</span>}
+                                                    </div>
+                                                    <h4 className={`font-bold leading-tight text-wps-deep ${isEmpty ? 'text-[11px] leading-[1.2] italic whitespace-normal' : 'text-base truncate'}`}>
+                                                        {subjectDisplay}
+                                                    </h4>
+                                                </div>
+                                            </div>
+                                        );
+                                    })}
+                                </div>
+                            </>
+                        ) : (
+                            <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
+                                <div className="bg-white rounded-[2rem] p-8 text-center shadow-sm border border-slate-100">
+                                    <h2 className="text-wps-deep font-black text-xl uppercase tracking-tighter">Prep Payback</h2>
+                                    <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-1">Manage owed prep periods</p>
+                                </div>
+                                
+                                <div className="space-y-3">
+                                    {Object.entries(owedData).filter(([_, count]) => count > 0).length === 0 ? (
+                                        <div className="bg-white rounded-[2rem] p-12 text-center opacity-40">
+                                            <p className="text-xs font-black uppercase text-slate-400 tracking-widest">No preps currently owed</p>
+                                        </div>
+                                    ) : (
+                                        Object.entries(owedData)
+                                            .filter(([_, count]) => count > 0)
+                                            .sort((a,b) => b[1] - a[1])
+                                            .map(([staffId, count]) => {
+                                                const displayName = data[staffId]?.displayName || staffId;
+                                                return (
+                                                    <div 
+                                                        key={staffId} 
+                                                        onClick={() => setModal({ type: 'payback', staffId, name: displayName })}
+                                                        className="flex items-center justify-between p-5 bg-white rounded-3xl shadow-sm border border-slate-50 active:scale-95 transition-transform cursor-pointer"
+                                                    >
+                                                        <div className="flex items-center gap-4">
+                                                            <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center text-wps-deep font-black text-lg">
+                                                                {displayName.charAt(0)}
+                                                            </div>
+                                                            <div>
+                                                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Teacher</p>
+                                                                <h4 className="font-bold text-wps-deep">{displayName}</h4>
+                                                            </div>
+                                                        </div>
+                                                        <div className="bg-red-50 px-4 py-2 rounded-2xl text-center border border-red-100">
+                                                            <p className="text-[8px] font-black text-red-400 uppercase mb-0.5">Owed</p>
+                                                            <p className="text-xl font-black text-red-600 leading-none">{count}</p>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            })
+                                    )}
+                                </div>
+                            </div>
+                        )}
                     </div>
-                    
-                    <footer className="fixed bottom-0 left-0 right-0 bg-white/80 backdrop-blur-md py-4 text-center border-t border-slate-100 cursor-pointer active:opacity-50" onClick={syncData}>
-                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.5em]">Winchester Public School</p>
+
+                    {/* Confirmation Modal */}
+                    {modal && (
+                        <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-wps-deep/80 backdrop-blur-sm">
+                            <div className="bg-white w-full max-w-xs rounded-[2.5rem] p-8 shadow-2xl scale-in overflow-hidden relative">
+                                <div className={`absolute top-0 left-0 right-0 h-2 ${modal.type === 'steal' ? 'bg-orange-500' : 'bg-green-500'}`}></div>
+                                <h3 className="text-xl font-black text-wps-deep uppercase tracking-tighter text-center mb-2">
+                                    {modal.type === 'steal' ? 'Steal Prep?' : 'Pay Back?'}
+                                </h3>
+                                <p className="text-slate-500 text-center text-sm leading-relaxed mb-8">
+                                    {modal.type === 'steal' 
+                                        ? `Confirm you are taking away a prep period from ${modal.name}. This will add 1 to their owed total.`
+                                        : `Confirm that ${modal.name} has been paid back. This will subtract 1 from their owed total.`}
+                                </p>
+                                <div className="space-y-3">
+                                    <button 
+                                        onClick={handleAction}
+                                        className={`w-full py-4 rounded-2xl text-white font-black uppercase tracking-widest text-xs shadow-lg transition-transform active:scale-95 ${modal.type === 'steal' ? 'bg-orange-500' : 'bg-green-500'}`}
+                                    >
+                                        Yes, Confirm
+                                    </button>
+                                    <button 
+                                        onClick={() => setModal(null)}
+                                        className="w-full py-4 rounded-2xl bg-slate-100 text-slate-400 font-black uppercase tracking-widest text-xs transition-transform active:scale-95"
+                                    >
+                                        Cancel
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    )}
+
+                    {/* Footer */}
+                    <footer className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-lg pt-2 pb-6 px-6 text-center border-t border-slate-100 flex items-center justify-between">
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em]">WPS Staff Portal</p>
+                        <button onClick={syncData} className="p-2 bg-slate-50 rounded-lg active:bg-slate-200 transition-colors">
+                            <svg className={`w-4 h-4 text-slate-400 ${isSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                            </svg>
+                        </button>
                     </footer>
                 </div>
             );
