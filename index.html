@@ -16,11 +16,6 @@
     <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
     <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
     
-    <!-- Firebase SDKs -->
-    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-app-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-auth-compat.js"></script>
-    <script src="https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore-compat.js"></script>
-
     <script>
         tailwind.config = {
             theme: {
@@ -61,20 +56,10 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
-        // Firebase Setup using Compat layer for script tag compatibility
-        const firebaseConfig = JSON.parse(__firebase_config);
-        if (!firebase.apps.length) {
-            firebase.initializeApp(firebaseConfig);
-        }
-        const auth = firebase.auth();
-        const db = firebase.firestore();
-        const appId = typeof __app_id !== 'undefined' ? __app_id : 'wps-portal-v1';
-
-        const API_URL = "https://script.google.com/macros/s/AKfycbx4RpGMEY7quXqwWd6SNf6Bu3hCTNPm5BmHt_PMidb3STiZMmBwafWOC2XcmHuHd_6p/exec";
-        const STORAGE_KEY = "wps_v17_prep_tracking";
+        const API_URL = "https://script.google.com/macros/s/AKfycbzBWz_4emd-o14G3PV2gRcdi9QLXWvcchIKqc6oYpMHVcJT_Pf0pPYSMaiARv8xBQgC/exec";
+        const STORAGE_KEY = "wps_v21_sheet_tracking";
 
         const App = () => {
-            const [user, setUser] = useState(null);
             const [data, setData] = useState(() => {
                 const cached = localStorage.getItem(STORAGE_KEY);
                 return cached ? JSON.parse(cached) : null;
@@ -83,47 +68,7 @@
             const [selectedDay, setSelectedDay] = useState("1");
             const [isSyncing, setIsSyncing] = useState(false);
             const [view, setView] = useState("schedule");
-            const [owedData, setOwedData] = useState({});
             const [modal, setModal] = useState(null);
-
-            // 1. Initialize Auth
-            useEffect(() => {
-                const initAuth = async () => {
-                    try {
-                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                            await auth.signInWithCustomToken(__initial_auth_token);
-                        } else {
-                            await auth.signInAnonymously();
-                        }
-                    } catch (err) {
-                        console.error("Auth error", err);
-                    }
-                };
-                initAuth();
-                const unsubscribe = auth.onAuthStateChanged(setUser);
-                return () => unsubscribe();
-            }, []);
-
-            // 2. Listen to Owed Preps (Firestore)
-            useEffect(() => {
-                if (!user) return;
-                // Rule 1: Use strict pathing
-                const path = `artifacts/${appId}/public/data/owed_preps`;
-                const unsubscribe = db.collection(path).onSnapshot((snapshot) => {
-                    const results = {};
-                    snapshot.forEach((doc) => {
-                        results[doc.id] = doc.data().count || 0;
-                    });
-                    setOwedData(results);
-                }, (err) => console.error("Firestore error:", err));
-                return () => unsubscribe();
-            }, [user]);
-
-            const cycleDay = useMemo(() => {
-                if (!data || !data.currentCycleDay) return "N/A";
-                const val = data.currentCycleDay.toString().trim();
-                return val.length > 2 ? val.charAt(0) : val;
-            }, [data]);
 
             const syncData = async () => {
                 setIsSyncing(true);
@@ -141,6 +86,22 @@
 
             useEffect(() => { syncData(); }, []);
 
+            const owedData = useMemo(() => {
+                if (!data || !data["Prep Paybacks"]) return {};
+                return data["Prep Paybacks"].reduce((acc, row) => {
+                    if (row.Staff) {
+                        acc[row.Staff] = row.Balance || 0;
+                    }
+                    return acc;
+                }, {});
+            }, [data]);
+
+            const cycleDay = useMemo(() => {
+                if (!data || !data.currentCycleDay) return "N/A";
+                const val = data.currentCycleDay.toString().trim();
+                return val.length > 2 ? val.charAt(0) : val;
+            }, [data]);
+
             useEffect(() => {
                 const day = cycleDay?.charAt(0);
                 if (day && ["1", "2", "3", "4", "5"].includes(day)) {
@@ -150,7 +111,7 @@
 
             const staffList = useMemo(() => {
                 if (!data) return [];
-                const exclude = ["TEMPLATE", "MOD", "Language", "Dropdowns", "Staff", "REG", "Cycle Days", "currentCycleDay"];
+                const exclude = ["TEMPLATE", "MOD", "Language", "Dropdowns", "Staff", "REG", "Cycle Days", "currentCycleDay", "Prep Paybacks"];
                 return Object.keys(data)
                     .filter(id => !exclude.includes(id))
                     .map(id => ({
@@ -171,17 +132,25 @@
             }, [staffList, selectedSheetId]);
 
             const handleAction = async () => {
-                if (!modal || !user) return;
+                if (!modal) return;
                 const { type, staffId } = modal;
-                const docRef = db.doc(`artifacts/${appId}/public/data/owed_preps/${staffId}`);
+                setIsSyncing(true);
+                setModal(null);
                 
                 try {
-                    const increment = firebase.firestore.FieldValue.increment(type === 'steal' ? 1 : -1);
-                    await docRef.set({ count: increment }, { merge: true });
+                    await fetch(API_URL, {
+                        method: 'POST',
+                        mode: 'no-cors', 
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ type, staffId })
+                    });
+                    
+                    // Delay for calculation before refresh
+                    setTimeout(syncData, 2000);
                 } catch (e) {
                     console.error("Update failed", e);
+                    setIsSyncing(false);
                 }
-                setModal(null);
             };
 
             if (!data) return (
@@ -189,7 +158,7 @@
                     <div className="w-20 h-20 bg-wps-deep rounded-2xl animate-pulse mb-6 flex items-center justify-center">
                         <span className="text-white font-black text-2xl">W</span>
                     </div>
-                    <p className="text-wps-deep font-black uppercase tracking-widest text-xs">Connecting...</p>
+                    <p className="text-wps-deep font-black uppercase tracking-widest text-xs">Syncing with WPS Hub...</p>
                 </div>
             );
 
@@ -199,7 +168,6 @@
 
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col no-select pb-24">
-                    {/* Header */}
                     <div className="bg-wps-deep p-5 text-white shadow-xl relative z-10">
                         <div className="flex justify-between items-start mb-6">
                             <div className="flex items-center gap-3 cursor-pointer" onClick={syncData}>
@@ -209,7 +177,7 @@
                                 <div>
                                     <h1 className="text-xl font-black uppercase tracking-tighter leading-none">WPS Hub</h1>
                                     <p className="text-[10px] font-bold opacity-50 uppercase tracking-widest mt-1">
-                                        {isSyncing ? 'Refreshing...' : 'Staff Portal'}
+                                        {isSyncing ? 'Syncing...' : 'Live Portal'}
                                     </p>
                                 </div>
                             </div>
@@ -219,7 +187,6 @@
                             </div>
                         </div>
 
-                        {/* View Toggle */}
                         <div className="flex gap-2 bg-black/20 p-1 rounded-xl mb-4">
                             <button 
                                 onClick={() => setView('schedule')}
@@ -231,7 +198,7 @@
                                 onClick={() => setView('payback')}
                                 className={`flex-1 py-2 text-[10px] font-black uppercase tracking-widest rounded-lg transition-all ${view === 'payback' ? 'bg-white text-wps-deep shadow-md' : 'text-white/60'}`}
                             >
-                                Payback {Object.values(owedData).reduce((a,b) => a+b, 0) > 0 && <span className="ml-1 px-1.5 py-0.5 bg-red-500 text-white rounded-full text-[8px]">{Object.values(owedData).reduce((a,b) => a+b, 0)}</span>}
+                                Payback {Object.values(owedData).filter(v => v > 0).length > 0 && <span className="ml-1 px-1.5 py-0.5 bg-red-500 text-white rounded-full text-[8px]">{Object.values(owedData).filter(v => v > 0).length}</span>}
                             </button>
                         </div>
 
@@ -250,7 +217,6 @@
                         )}
                     </div>
 
-                    {/* Main Content */}
                     <div className="p-4 space-y-4">
                         {view === 'schedule' ? (
                             <>
@@ -271,17 +237,17 @@
                                         </div>
                                     </div>
                                     
-                                    {currentStaff?.assignment && (
+                                    {(currentStaff?.assignment || (currentStaff && owedData[currentStaff.displayName])) && (
                                         <div className="mt-4 flex items-center justify-between px-1">
                                             <div className="flex items-center gap-2">
                                                 <div className="h-1.5 w-1.5 rounded-full bg-wps-bright animate-pulse"></div>
                                                 <span className="text-[10px] font-black text-wps-deep/60 uppercase tracking-wider truncate">
-                                                    {currentStaff.assignment}
+                                                    {currentStaff.assignment || 'Duty Member'}
                                                 </span>
                                             </div>
-                                            {owedData[selectedSheetId] > 0 && (
+                                            {owedData[currentStaff.displayName] > 0 && (
                                                 <span className="bg-red-100 text-red-600 text-[9px] font-black px-2 py-0.5 rounded-full">
-                                                    OWED: {owedData[selectedSheetId]}
+                                                    OWED: {owedData[currentStaff.displayName]}
                                                 </span>
                                             )}
                                         </div>
@@ -292,7 +258,7 @@
                                     {periods.map((pNum, i) => {
                                         const rawSubject = currentSchedule[i] || "";
                                         const isEmpty = !rawSubject || rawSubject === "Free Period";
-                                        const subjectDisplay = isEmpty ? "Unknown, but probably something awesome" : rawSubject;
+                                        const subjectDisplay = isEmpty ? "No assignment recorded" : rawSubject;
                                         const isPrepsView = selectedSheetId === "PREPS";
                                         
                                         return (
@@ -311,9 +277,9 @@
                                                 <div className="flex-1 overflow-hidden">
                                                     <div className="flex justify-between items-center">
                                                         <p className="text-[8px] font-black text-slate-400 uppercase tracking-widest mb-0.5">Period {pNum}</p>
-                                                        {isPrepsView && !isEmpty && <span className="text-[7px] font-black bg-wps-bright/10 text-wps-deep px-1.5 py-0.5 rounded">TAP TO STEAL</span>}
+                                                        {isPrepsView && !isEmpty && <span className="text-[7px] font-black bg-wps-bright/10 text-wps-deep px-1.5 py-0.5 rounded">STEAL PREP</span>}
                                                     </div>
-                                                    <h4 className={`font-bold leading-tight text-wps-deep ${isEmpty ? 'text-[11px] leading-[1.2] italic whitespace-normal' : 'text-base truncate'}`}>
+                                                    <h4 className={`font-bold leading-tight text-wps-deep ${isEmpty ? 'text-[11px] leading-[1.2] italic whitespace-normal opacity-50' : 'text-base truncate'}`}>
                                                         {subjectDisplay}
                                                     </h4>
                                                 </div>
@@ -326,33 +292,32 @@
                             <div className="space-y-4 animate-in fade-in slide-in-from-bottom-4 duration-300">
                                 <div className="bg-white rounded-[2rem] p-8 text-center shadow-sm border border-slate-100">
                                     <h2 className="text-wps-deep font-black text-xl uppercase tracking-tighter">Prep Payback</h2>
-                                    <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-1">Manage owed prep periods</p>
+                                    <p className="text-slate-400 text-[10px] font-bold uppercase tracking-widest mt-1">Real-time Sheet Balances</p>
                                 </div>
                                 
                                 <div className="space-y-3">
                                     {Object.entries(owedData).filter(([_, count]) => count > 0).length === 0 ? (
                                         <div className="bg-white rounded-[2rem] p-12 text-center opacity-40">
-                                            <p className="text-xs font-black uppercase text-slate-400 tracking-widest">No preps currently owed</p>
+                                            <p className="text-xs font-black uppercase text-slate-400 tracking-widest">Balance Clear</p>
                                         </div>
                                     ) : (
                                         Object.entries(owedData)
                                             .filter(([_, count]) => count > 0)
                                             .sort((a,b) => b[1] - a[1])
-                                            .map(([staffId, count]) => {
-                                                const displayName = data[staffId]?.displayName || staffId;
+                                            .map(([name, count]) => {
                                                 return (
                                                     <div 
-                                                        key={staffId} 
-                                                        onClick={() => setModal({ type: 'payback', staffId, name: displayName })}
+                                                        key={name} 
+                                                        onClick={() => setModal({ type: 'payback', staffId: name, name: name })}
                                                         className="flex items-center justify-between p-5 bg-white rounded-3xl shadow-sm border border-slate-50 active:scale-95 transition-transform cursor-pointer"
                                                     >
                                                         <div className="flex items-center gap-4">
                                                             <div className="w-12 h-12 rounded-2xl bg-slate-50 flex items-center justify-center text-wps-deep font-black text-lg">
-                                                                {displayName.charAt(0)}
+                                                                {name.charAt(0)}
                                                             </div>
                                                             <div>
-                                                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Teacher</p>
-                                                                <h4 className="font-bold text-wps-deep">{displayName}</h4>
+                                                                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest">Staff</p>
+                                                                <h4 className="font-bold text-wps-deep">{name}</h4>
                                                             </div>
                                                         </div>
                                                         <div className="bg-red-50 px-4 py-2 rounded-2xl text-center border border-red-100">
@@ -368,7 +333,6 @@
                         )}
                     </div>
 
-                    {/* Confirmation Modal */}
                     {modal && (
                         <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-wps-deep/80 backdrop-blur-sm">
                             <div className="bg-white w-full max-w-xs rounded-[2.5rem] p-8 shadow-2xl scale-in overflow-hidden relative">
@@ -378,15 +342,15 @@
                                 </h3>
                                 <p className="text-slate-500 text-center text-sm leading-relaxed mb-8">
                                     {modal.type === 'steal' 
-                                        ? `Confirm you are taking away a prep period from ${modal.name}. This will add 1 to their owed total.`
-                                        : `Confirm that ${modal.name} has been paid back. This will subtract 1 from their owed total.`}
+                                        ? `Deduct a prep from ${modal.name}. This increments the stolen column in your sheet.`
+                                        : `Confirm that ${modal.name} has been paid back. This increments the payback column in your sheet.`}
                                 </p>
                                 <div className="space-y-3">
                                     <button 
                                         onClick={handleAction}
                                         className={`w-full py-4 rounded-2xl text-white font-black uppercase tracking-widest text-xs shadow-lg transition-transform active:scale-95 ${modal.type === 'steal' ? 'bg-orange-500' : 'bg-green-500'}`}
                                     >
-                                        Yes, Confirm
+                                        Update Google Sheet
                                     </button>
                                     <button 
                                         onClick={() => setModal(null)}
@@ -399,9 +363,8 @@
                         </div>
                     )}
 
-                    {/* Footer */}
                     <footer className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-lg pt-2 pb-6 px-6 text-center border-t border-slate-100 flex items-center justify-between">
-                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em]">WPS Staff Portal</p>
+                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em]">WPS Hub &bull; Sheet Tracking Active</p>
                         <button onClick={syncData} className="p-2 bg-slate-50 rounded-lg active:bg-slate-200 transition-colors">
                             <svg className={`w-4 h-4 text-slate-400 ${isSyncing ? 'animate-spin' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
