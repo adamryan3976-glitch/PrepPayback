@@ -145,7 +145,6 @@
                         headers: { 'Content-Type': 'application/json' },
                         body: JSON.stringify({ type, staffId })
                     });
-                    // Refresh portal data after a small delay
                     setTimeout(syncData, 2500);
                 } catch (e) {
                     console.error("Action failed", e);
@@ -176,8 +175,19 @@
 
             return (
                 <div className="max-w-md mx-auto min-h-screen bg-slate-50 flex flex-col no-select pb-28">
+                    
+                    {/* Navigation Bar */}
+                    <div className="p-4 pb-0 flex items-center justify-between">
+                        <a href="https://winchesterps.ca/" className="flex items-center gap-1 py-1.5 px-2 bg-white border border-slate-200 rounded-lg text-slate-500 hover:text-wps-navy hover:bg-slate-100 transition-all shadow-sm" title="Back to Landing Page">
+                            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M15 19l-7-7 7-7" />
+                            </svg>
+                            <span className="text-[9px] font-black tracking-tighter uppercase">Back to Hub</span>
+                        </a>
+                    </div>
+
                     {/* Header Area */}
-                    <div className="bg-wps-navy p-6 text-white shadow-2xl relative z-10 rounded-b-[2.5rem]">
+                    <div className="bg-wps-navy m-4 mt-2 p-6 text-white shadow-2xl relative z-10 rounded-[2.5rem]">
                         <div className="flex justify-between items-start mb-6">
                             <div className="flex items-center gap-4">
                                 <img src="WPSLogo.jpg" className={`w-14 h-14 rounded-xl shadow-lg border-2 border-white/10 ${isSyncing ? 'animate-pulse' : ''}`} alt="WPS" onClick={syncData} />
@@ -194,7 +204,7 @@
                             </div>
                         </div>
 
-                        {/* Navigation */}
+                        {/* View Switcher */}
                         <div className="flex gap-2 bg-black/20 p-1.5 rounded-2xl mb-4 border border-white/5">
                             <button onClick={() => setView('schedule')} className={`flex-1 py-2.5 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${view === 'schedule' ? 'bg-wps-gold text-wps-navy shadow-md' : 'text-white/60'}`}>Schedule</button>
                             <button onClick={() => setView('payback')} className={`flex-1 py-2.5 text-[10px] font-black uppercase tracking-widest rounded-xl transition-all ${view === 'payback' ? 'bg-wps-gold text-wps-navy shadow-md' : 'text-white/60'}`}>
@@ -214,7 +224,7 @@
                     <div className="p-4 space-y-4">
                         {view === 'schedule' ? (
                             <>
-                                <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100 mt-2">
+                                <div className="bg-white rounded-[2rem] p-6 shadow-sm border border-slate-100">
                                     <label className="text-[10px] font-extrabold text-slate-400 uppercase tracking-widest block mb-3 ml-1">Staff Member</label>
                                     <div className="relative">
                                         <select value={selectedId} onChange={e => setSelectedId(e.target.value)} className="w-full bg-slate-50 border-2 border-slate-50 rounded-2xl p-4 font-extrabold text-wps-navy text-lg focus:border-wps-gold outline-none appearance-none">
@@ -284,7 +294,7 @@
                         )}
                     </div>
 
-                    {/* Staff Selection List */}
+                    {/* Modals & Overlays */}
                     {selectionList && (
                         <div className="fixed inset-0 z-[60] flex items-center justify-center p-6 bg-wps-navy/95 backdrop-blur-md">
                             <div className="bg-white w-full max-w-sm rounded-[2.5rem] p-6 shadow-2xl scale-in max-h-[80vh] flex flex-col">
@@ -309,7 +319,6 @@
                         </div>
                     )}
 
-                    {/* Confirmation Modal */}
                     {modal && (
                         <div className="fixed inset-0 z-50 flex items-center justify-center p-6 bg-wps-navy/80 backdrop-blur-sm">
                             <div className="bg-white w-full max-w-xs rounded-[2.5rem] p-8 shadow-2xl scale-in overflow-hidden relative border-t-8 border-wps-gold">
