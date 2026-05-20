@@ -1,13 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+    <script>
+        // 1. Instantly hide the page layout to prevent "flash of content" bypass
+        document.documentElement.style.display = 'none';
+    </script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>WPS Portal</title>
     
     <!-- App Icons & PWA Tags -->
-    <link rel="icon" type="image/jpeg" href="WPSLogo.jpg">
-    <link rel="apple-touch-icon" href="WPSLogo.jpg">
+    <link rel="icon" type="image/jpeg" href="WPSLogo.jpg" onerror="this.href='https://img.icons8.com/fluency/96/hourglass.png'">
+    <link rel="apple-touch-icon" href="WPSLogo.jpg" onerror="this.href='https://img.icons8.com/fluency/96/hourglass.png'">
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="WPS Portal">
@@ -65,6 +69,9 @@
     <script type="text/babel">
         const { useState, useEffect, useMemo } = React;
 
+        // CONFIGURATION
+        const HUB_URL = "https://winchesterps.ca";
+        const VERIFY_URL = "https://script.google.com/macros/s/AKfycbzGgmaua3PK6IXiljngAxcuQP0FoRxtLQ9ec6MQOSRpmFlGfIkUc_64jM_eI-G-0Wzj/exec";
         const API_URL = "https://script.google.com/macros/s/AKfycbyYHflWzTNDd1LFwjdXQkafrxPt0rDb7aIKsSIGMeaoDHEyFYync_tTcvHsOqmzarcJ/exec";
         const STORAGE_KEY = "wps_portal_v27";
 
@@ -164,7 +171,7 @@
 
             if (!data) return (
                 <div className="h-screen flex flex-col items-center justify-center bg-white p-10 text-center">
-                    <img src="WPSLogo.jpg" className="w-24 h-24 mb-6 rounded-2xl animate-pulse shadow-xl" alt="WPS Logo" />
+                    <img src="WPSLogo.jpg" onerror="this.onerror=null; this.src='https://img.icons8.com/fluency/96/hourglass.png';" className="w-24 h-24 mb-6 rounded-2xl animate-pulse shadow-xl" alt="WPS Logo" />
                     <p className="text-wps-navy font-extrabold uppercase tracking-widest text-[10px]">Accessing WPS Portal...</p>
                 </div>
             );
@@ -190,7 +197,7 @@
                     <div className="bg-wps-navy m-4 mt-2 p-6 text-white shadow-2xl relative z-10 rounded-[2.5rem]">
                         <div className="flex justify-between items-start mb-6">
                             <div className="flex items-center gap-4">
-                                <img src="WPSLogo.jpg" className={`w-14 h-14 rounded-xl shadow-lg border-2 border-white/10 ${isSyncing ? 'animate-pulse' : ''}`} alt="WPS" onClick={syncData} />
+                                <img src="WPSLogo.jpg" onerror="this.onerror=null; this.src='https://img.icons8.com/fluency/96/hourglass.png';" className={`w-14 h-14 rounded-xl shadow-lg border-2 border-white/10 ${isSyncing ? 'animate-pulse' : ''}`} alt="WPS" onClick={syncData} />
                                 <div>
                                     <h1 className="text-2xl font-black uppercase tracking-tighter leading-none">WPS PORTAL</h1>
                                     <p className="text-[9px] font-bold text-wps-gold uppercase tracking-[0.2em] mt-1">
@@ -334,7 +341,7 @@
 
                     <footer className="fixed bottom-0 left-0 right-0 bg-white/90 backdrop-blur-lg pt-4 pb-8 px-8 text-center border-t border-slate-100 flex items-center justify-between shadow-[0_-10px_30px_rgba(0,0,0,0.05)]">
                         <div className="flex items-center gap-2">
-                            <img src="WPSLogo.jpg" className="w-5 h-5 rounded-md grayscale opacity-50" alt="" />
+                            <img src="WPSLogo.jpg" onerror="this.onerror=null; this.src='https://img.icons8.com/fluency/96/hourglass.png';" className="w-5 h-5 rounded-md grayscale opacity-50" alt="" />
                             <p className="text-[9px] font-black text-slate-400 uppercase tracking-[0.3em]">WPS Portal &bull; System Active</p>
                         </div>
                         <button onClick={syncData} className="p-2.5 bg-slate-50 rounded-xl active:bg-slate-200 transition-colors border border-slate-100">
@@ -345,8 +352,60 @@
             );
         };
 
-        const root = ReactDOM.createRoot(document.getElementById('root'));
-        root.render(<App />);
+        // Extract cookie value securely
+        function getSharedCookie(name) {
+            const val = `; ${document.cookie}`;
+            const parts = val.split(`; ${name}=`);
+            if (parts.length === 2) return decodeURIComponent(parts.pop().split(';').shift());
+            return null;
+        }
+
+        // BOOTSTRAP GATEKEEPER CHECK
+        async function secureInit() {
+            // Check if we are in a preview, iframe, or local environment
+            const isPreviewOrLocal = 
+                window.location.hostname === "localhost" || 
+                window.location.hostname === "127.0.0.1" || 
+                window.location.hostname.includes("preview") || 
+                window.location.hostname.includes("htmlpreview") ||
+                (window.self !== window.top && !window.location.hostname.includes("winchesterps.ca"));
+
+            if (isPreviewOrLocal) {
+                console.warn("Preview/Local Sandbox detected. Bypassing Gatekeeper redirect to prevent loop.");
+                document.documentElement.style.display = '';
+                const root = ReactDOM.createRoot(document.getElementById('root'));
+                root.render(<App />);
+                return;
+            }
+
+            const token = getSharedCookie('wps_auth_token');
+
+            if (!token) {
+                window.location.replace(HUB_URL);
+                return;
+            }
+
+            try {
+                // Query Backend validation prior to rendering any application logic
+                const response = await fetch(`${VERIFY_URL}?action=verify&token=${token}`);
+                const data = await response.json();
+
+                if (data && data.approved === true) {
+                    // Approved -> Reveal layout and mount App
+                    document.documentElement.style.display = '';
+                    const root = ReactDOM.createRoot(document.getElementById('root'));
+                    root.render(<App />);
+                } else {
+                    window.location.replace(HUB_URL);
+                }
+            } catch (e) {
+                console.error("Gatekeeper verification error:", e);
+                window.location.replace(HUB_URL);
+            }
+        }
+
+        // Run the secure gatekeeper bootstrap logic on load
+        secureInit();
     </script>
 </body>
 </html>
